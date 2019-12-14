@@ -1,27 +1,30 @@
-.globl open_devmem, close_devmem, mmap, munmap, gpio_offset, function_select
+.globl open_devmem, close_devmem, mmap, munmap, gpio_function_select, gpio_set, gpio_clr
 
 
 @ DEFINITIONEN
 .equ BITS_PER_GPIO, 3
 .equ GPIOS_PER_REG, 10
-.equ TARGET_GPIO, 4
 .equ mask, 0b111
 .equ PERI_BASE,			0x3f000000
 .equ GPIO_BASEOFFSET, 	0x00200000
 .equ GPIO_LASTADDRESS, 	0x002000B4
 .equ GPIO_MEMSIZE, 		0x00001000
+
+.equ SYSCALL_OPEN,5
+.equ SYSCALL_CLOSE,6
+.equ SYSCALL_WRITE,4
+.equ SYSCALL_MMAP,192
+.equ SYSCALL_MUNMAP,92
+
+.equ OPEN_PARAMETER_SYNC_RDWR, 0x00101002
+
 .set GPIO_BASE, PERI_BASE+GPIO_BASEOFFSET
-
-
-.include "SYSCALLS.h"
-
 
 .data
 .balign 4
 
 	# RaspPi 2: GPIO addresses start at 0x3f200000
 	PERI_BASE_WORD:				.word GPIO_BASE
-	OPEN_PARAMETER_SYNC_RDWR:	.word OPEN_PARAMETER_SYNC_RDWR
 	dev_mem_filename: 			.asciz "/dev/mem"
 
 
@@ -42,7 +45,6 @@
 	// for open() function
 	ldr r0, =dev_mem_filename
 	ldr r1, =OPEN_PARAMETER_SYNC_RDWR
-	ldr r1, [r1]
 	mov r2, #0
 	//r7 determines syscall function
 	mov r7, #SYSCALL_OPEN
@@ -82,8 +84,9 @@
 	mov ip, sp
 	stmfd sp!, {r4-r11, lr}
 	mov fp, ip
+
 	// mmap arguments
-	//---------------
+	// --------------
 	// r0 address
 	// r1 length
 	// r2 security
@@ -92,11 +95,11 @@
 	// r5 offset
 	// r7 syscall code
 
+	mov r4, r0
 	mov r0, #0
 	mov r1, #GPIO_MEMSIZE
 	mov r2, #3
 	mov r3, #1
-	mov r4, r11
 	ldr r5, =GPIO_BASE
 	lsr r5, r5, #12
 
@@ -107,15 +110,56 @@
 	bx lr
 
 
-	fuction_select:
+	gpio_set:
 	// parameters
-	// r0: function code
-	// r1: reg_offset
-	// r2: pin_offset
+	// r1: target gpio
+	// r2: gpio base address
 
 	mov ip, sp
 	stmfd sp!, {r4-r11, lr}
 	mov fp, ip
+
+	// select pin via mask
+	mov r0, #0b1
+	lsl r0, r0, r1
+	str r0, [r2, #28]
+
+	ldmfd sp!, {r4-r11, lr}
+	bx lr
+
+
+	gpio_clr:
+	// parameters
+	// r1: target gpio
+	// r2: gpio base address
+
+	mov ip, sp
+	stmfd sp!, {r4-r11, lr}
+	mov fp, ip
+
+	// select pin via mask
+	mov r0, #0b1
+	lsl r0, r0, r1
+	str r0, [r2, #40]
+
+	ldmfd sp!, {r4-r11, lr}
+	bx lr
+
+
+	gpio_function_select:
+	// parameters
+	// r0: function code
+	// r1: target gpio
+	// r2: base address
+
+	mov ip, sp
+	stmfd sp!, {r4-r11, lr}
+	mov fp, ip
+
+	mov r9, r0
+	mov r8, r2
+	mov r0, r1
+	bl gpio_fsel_offset
 
 	// add register offset to base address
 	add r4, r8, r1
@@ -125,7 +169,7 @@
 	mov r7, #0b111
 	bic r11, r11, r7, LSL R2	// R0 <- R0 AND NOT ( 0b111 << R10)
 	// create ouput mask, shift to pin and or
-	mov r6, r0
+	mov r6, r9
 	orr r11, r11, r6, LSL R2 // R0 <- R0 ORR (0b101 << R10)
 	// store to update the gpio
 	str r11, [r4]
@@ -135,11 +179,13 @@
 
 
 	munmap:
+	// parameter
+	// r0: gpio base address
+
 	mov ip, sp
 	stmfd sp!, {r4-r11, lr}
 	mov fp, ip
 
-	mov r0, r10
 	mov r1, #GPIO_MEMSIZE
 	mov r7, #SYSCALL_MUNMAP
 	swi #0
@@ -161,7 +207,10 @@
 	bx lr
 
 
-	gpio_offsets:
+	gpio_fsel_offset:
+	// parameters
+	// r0: target gpio
+
 	// returns
 	// r1: register_offset
 	// r2: pin offset
@@ -181,9 +230,9 @@
 	//r1: register address
 
 	// initialize regs
+	//---------------------------
 	mov r1, #0
 	mov r10, #GPIOS_PER_REG
-	mov r0, #TARGET_GPIO
 
 	div_loop_reg_addr:
 
@@ -200,10 +249,11 @@
 
 	div_loop_reg_addr_done:
 	b pin_offs
-	//---------------------------------
+	//---------------------------
 
 
 	pin_offs:
+	//---------------------------
 	// returns
 	// r2: pin address offset
 
